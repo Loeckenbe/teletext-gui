@@ -1,9 +1,12 @@
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
 use crate::parser::{HtmlItem, HtmlLink, HtmlText, TeleText, MIDDLE_TEXT_MAX_LEN};
-use egui::{FontId, InputState, RichText, TextStyle};
+use egui::{InputState, TextStyle};
 
-use super::common::{FetchState, GuiContext, IGuiCtx, PageDraw, TelePage, TelePager};
+use super::{
+    common::{FetchState, GuiContext, IGuiCtx, PageDraw, TelePage, TelePager},
+    svg_icon::{IconName, SvgIcon},
+};
 
 pub struct GuiYleText<'a> {
     ui: &'a mut egui::Ui,
@@ -26,7 +29,7 @@ impl<'a> GuiYleText<'a> {
             self.ctx.borrow().current_page.page.to_string()
         };
 
-        format!("P{}", page_num)
+        format!("P{page_num}")
     }
 
     fn draw_header_small(&mut self, title: &HtmlText) {
@@ -91,22 +94,22 @@ impl<'a> GuiYleText<'a> {
             ui.add_space(page_nav_start);
             for (idx, item) in navigation.iter().enumerate() {
                 let icon = match idx {
-                    0 => "←",
-                    1 => "↑",
-                    2 => "↓",
-                    3 => "→",
-                    _ => "?",
+                    0 => IconName::ArrowLeft,
+                    1 => IconName::ArrowUp,
+                    2 => IconName::ArrowDown,
+                    3 => IconName::ArrowRight,
+                    _ => unreachable!(), // TODO: generic "error" icon
                 };
 
-                let icon_text = RichText::new(icon).font(FontId::monospace(body_font.size));
+                let icon = SvgIcon::from_icon(icon, arrow_width);
                 match item {
                     HtmlItem::Link(link) => {
-                        if ui.link(icon_text).clicked() {
+                        if ui.add(icon.into_link()).clicked() {
                             ctx.borrow_mut().load_page(&link.url, true);
                         };
                     }
                     HtmlItem::Text(_) => {
-                        ui.label(icon_text);
+                        ui.add(icon);
                     }
                 }
 
@@ -284,7 +287,7 @@ impl GuiYleTextContext {
 }
 
 impl IGuiCtx for GuiYleTextContext {
-    fn handle_input(&mut self, input: &InputState) {
+    fn handle_input(&mut self, input: InputState) {
         self.ctx.handle_input(input)
     }
 
@@ -315,10 +318,24 @@ impl IGuiCtx for GuiYleTextContext {
 }
 
 impl TelePager for TeleText {
+    #[cfg(not(target_arch = "wasm32"))]
     fn to_full_page(page: &TelePage) -> String {
         // https://yle.fi/tekstitv/txt/100_0001.htm
         format!(
             "https://yle.fi/tekstitv/txt/{}_{:04}.htm",
+            page.page, page.sub_page
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn to_full_page(page: &TelePage) -> String {
+        // https://yle.fi/tekstitv/txt/100_0001.htm
+        let proxy = env!(
+            "TELETEXT_PROXY_URL",
+            "TELETEXT_PROXY_URL env variable is required for wasm builds"
+        );
+        format!(
+            "{proxy}/?url=https://yle.fi/tekstitv/txt/{}_{:04}.htm",
             page.page, page.sub_page
         )
     }

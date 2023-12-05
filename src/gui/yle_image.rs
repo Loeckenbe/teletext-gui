@@ -1,11 +1,14 @@
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
-use egui::{FontId, InputState, RichText, TextStyle};
+use egui::{CursorIcon, InputState, TextStyle};
 use egui_extras::RetainedImage;
 
-use crate::parser::{HtmlLink, HtmlText, YleImage};
+use crate::parser::{common::HtmlImageArea, HtmlLink, HtmlText, YleImage};
 
-use super::common::{FetchState, GuiContext, IGuiCtx, PageDraw, TelePage, TelePager};
+use super::{
+    common::{FetchState, GuiContext, IGuiCtx, PageDraw, TelePage, TelePager},
+    svg_icon::{IconName, SvgIcon},
+};
 
 pub struct GuiYleImage<'a> {
     ui: &'a mut egui::Ui,
@@ -28,7 +31,7 @@ impl<'a> GuiYleImage<'a> {
             self.ctx.borrow().current_page.page.to_string()
         };
 
-        format!("P{}", page_num)
+        format!("P{page_num}")
     }
 
     fn draw_header_small(&mut self, title: &HtmlText) {
@@ -54,7 +57,7 @@ impl<'a> GuiYleImage<'a> {
         let nav_start = (self.panel_width / 2.0) - (nav_length / 2.0);
         let page_len = chw * 4.0;
         let time_len = chw * 15.0;
-        let title = format!("{} YLE TEKSTI-TV", title);
+        let title = format!("{title} YLE TEKSTI-TV");
         let title_len = (title.chars().count() as f32) * chw;
 
         let title_space = (nav_length / 2.0) - (title_len / 2.0) - page_len;
@@ -82,11 +85,36 @@ impl<'a> GuiYleImage<'a> {
         }
     }
 
-    fn draw_image(&mut self, image: &[u8]) {
+    fn draw_image(&mut self, image: &[u8], image_map: &Vec<HtmlImageArea>) {
+        let mut ctx = self.ctx.borrow_mut();
+        let pos = ctx.pointer.hover_pos();
+        let clicked = ctx.pointer.primary_released();
         self.ui
             .with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                 let image = RetainedImage::from_image_bytes("debug_name", image).unwrap();
-                image.show_max_size(ui, ui.available_size());
+
+                let resp = image.show_max_size(ui, ui.available_size());
+                if let Some(pos) = pos {
+                    let rh = resp.rect.max.y - resp.rect.min.y;
+                    let rw = resp.rect.max.x - resp.rect.min.x;
+                    // The aspect ratio of the image will stay the same as it's being scaled
+                    // so the scale of width and height will be the same
+                    let scale = rw / (image.size()[0] as f32);
+                    // Translate the pointer to be inside of the image
+                    let px = pos.x - resp.rect.min.x;
+                    let py = pos.y - resp.rect.min.y;
+                    if px > 0.0 && px < rw && py > 0.0 && py < rh {
+                        for area in image_map {
+                            if area.in_area(px, py, scale) {
+                                ui.ctx().output().cursor_icon = CursorIcon::PointingHand;
+                                if clicked {
+                                    ctx.load_page(&area.link, true);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
             });
     }
 
@@ -102,22 +130,22 @@ impl<'a> GuiYleImage<'a> {
             ui.add_space(page_nav_start);
             for (idx, item) in navigation.iter().enumerate() {
                 let icon = match idx {
-                    0 => "←",
-                    1 => "↑",
-                    2 => "↓",
-                    3 => "→",
-                    _ => "?",
+                    0 => IconName::ArrowLeft,
+                    1 => IconName::ArrowUp,
+                    2 => IconName::ArrowDown,
+                    3 => IconName::ArrowRight,
+                    _ => unreachable!(), // TODO: generic "error" icon
                 };
 
-                let icon_text = RichText::new(icon).font(FontId::monospace(body_font.size));
+                let icon = SvgIcon::from_icon(icon, arrow_width);
                 match item {
                     Some(link) => {
-                        if ui.link(icon_text).clicked() {
+                        if ui.add(icon.into_link()).clicked() {
                             ctx.borrow_mut().load_page(&link.url, true);
                         };
                     }
                     None => {
-                        ui.label(icon_text);
+                        ui.add(icon);
                     }
                 }
 
@@ -148,6 +176,16 @@ impl<'a> GuiYleImage<'a> {
         });
     }
 
+    fn draw_home_button(&mut self) {
+        let ctx = &self.ctx;
+        self.ui
+            .with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                if ui.link("Yle Teksti-TV").clicked() {
+                    ctx.borrow_mut().load_page("100_0001", true);
+                }
+            });
+    }
+
     fn draw_page_navigation(&mut self, navigation: &[Option<HtmlLink>]) {
         if self.is_small {
             self.draw_page_navigation_small(navigation);
@@ -165,8 +203,9 @@ impl<'a> PageDraw<'a, YleImage> for GuiYleImage<'a> {
         match state.lock().unwrap().deref() {
             FetchState::Complete(page) => {
                 self.draw_header(&page.title);
-                self.draw_image(&page.image);
+                self.draw_image(&page.image, &page.image_map);
                 self.draw_page_navigation(&page.botton_navigation);
+                self.draw_home_button();
             }
             FetchState::Fetching => {
                 self.ui
@@ -231,7 +270,7 @@ impl GuiYleImageContext {
 }
 
 impl IGuiCtx for GuiYleImageContext {
-    fn handle_input(&mut self, input: &InputState) {
+    fn handle_input(&mut self, input: InputState) {
         self.ctx.handle_input(input)
     }
 
@@ -262,10 +301,24 @@ impl IGuiCtx for GuiYleImageContext {
 }
 
 impl TelePager for YleImage {
+    #[cfg(not(target_arch = "wasm32"))]
     fn to_full_page(page: &TelePage) -> String {
         // https://yle.fi/aihe/yle-ttv/json?P=100_0001
         format!(
             "https://yle.fi/aihe/yle-ttv/json?P={}_{:04}",
+            page.page, page.sub_page
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn to_full_page(page: &TelePage) -> String {
+        // https://yle.fi/aihe/yle-ttv/json?P=100_0001
+        let proxy = env!(
+            "TELETEXT_PROXY_URL",
+            "TELETEXT_PROXY_URL env variable is required for wasm builds"
+        );
+        format!(
+            "{proxy}/?url=https://yle.fi/aihe/yle-ttv/json?P={}_{:04}",
             page.page, page.sub_page
         )
     }

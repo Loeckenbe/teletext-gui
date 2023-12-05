@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 mod common;
+mod svg_icon;
 mod yle_image;
 mod yle_text;
 use egui::{Color32, FontFamily, FontId, Style, TextStyle, Ui};
@@ -188,9 +189,6 @@ impl TeleTextApp {
             TeleTextSettings::default()
         };
 
-        /* let mut page = Box::new(GuiYleImageContext::new(GuiContext::new(
-            ctx.egui_ctx.clone(),
-        ))) as Box<dyn IGuiCtx>; */
         let mut page = settings.open_page.to_gui(&ctx.egui_ctx);
         let page_ref = &mut page as &mut Box<dyn IGuiCtx>;
 
@@ -226,7 +224,7 @@ impl eframe::App for TeleTextApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(page) = page {
-                page.handle_input(&input);
+                page.handle_input(input);
                 page.draw(ui);
             }
         });
@@ -246,7 +244,7 @@ impl eframe::App for TeleTextApp {
 fn top_menu_bar(
     ui: &mut Ui,
     egui: &egui::Context,
-    frame: &mut eframe::Frame,
+    _frame: &mut eframe::Frame,
     open: &mut bool,
     page: &mut Option<Box<dyn IGuiCtx>>,
     settings: &mut TeleTextSettings,
@@ -272,10 +270,14 @@ fn top_menu_bar(
                 ui.close_menu();
             }
 
-            ui.separator();
-            if ui.button("Quit").clicked() {
-                frame.close();
-                ui.close_menu();
+            // Cannot quit via menu on wasm
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.separator();
+                if ui.button("Quit").clicked() {
+                    _frame.close();
+                    ui.close_menu();
+                }
             }
         });
     });
